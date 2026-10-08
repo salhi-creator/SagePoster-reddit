@@ -1,0 +1,39 @@
+{
+  "private": true,
+  "name": "sageposter",
+  "version": "0.0.0",
+  "license": "BSD-3-Clause",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "build:watch": "vite build --watch",
+    "clean": "rm -rf dist",
+    "deploy": "npm run test && devvit upload",
+    "dev": "devvit playtest",
+    "launch": "devvit publish",
+    "lint": "eslint \"src/**/*.{ts,tsx}\"",
+    "prettier": "prettier --write .",
+    "test": "npm run test:types && npm run lint && npm run test:unit && npm run build",
+    "test:types": "tsc --build",
+    "test:unit": "npm run test:types && node --test \"dist/types/**/*.test.js\""
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "dependencies": {
+    "@devvit/start": "0.14.7",
+    "@devvit/web": "0.14.7",
+    "@hono/node-server": "^2.1.1",
+    "devvit": "0.14.7",
+    "hono": "4.13.13"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "^24.13.3",
+    "eslint": "10.12.0",
+    "prettier": "3.9.9",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.71.1",
+    "vite": "8.3.3"
+  }
+}
