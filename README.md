@@ -1,4 +1,4 @@
-# Devvit Mod Tool Template
+# SagePoster-reddit
 
 A template for building Reddit moderation tools using Devvit Web with feature-isolated server modules.
 Each moderation capability lives in its own folder under `src/features` so developers can remove a feature by deleting its folder and unregistering its route wiring.
