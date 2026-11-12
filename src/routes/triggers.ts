@@ -17,6 +17,10 @@ import {
   handleCommentSubmitFlairUpdater,
   handlePostSubmitFlairUpdater,
 } from '../features/flair-updater/triggers.js';
+import {
+  sendCommentEventToSageStore,
+  sendPostEventToSageStore,
+} from '../features/sagestore-events/notify.js';
 
 // Router for trigger endpoints declared in devvit.json/triggers.
 export const triggers = new Hono();
@@ -121,6 +125,9 @@ triggers.post('/on-comment-submit', async (c) => {
     runFeatureSafely('flair-updater:on-comment-submit', async () => {
       await handleCommentSubmitFlairUpdater(input);
     }),
+    runFeatureSafely('sagestore:on-comment-submit', async () => {
+      await sendCommentEventToSageStore(input);
+    }),
   ]);
 
   return c.json<TriggerResponse>({}, 200);
@@ -139,6 +146,9 @@ triggers.post('/on-post-submit', async (c) => {
     }),
     runFeatureSafely('sageposter:on-post-submit', async () => {
       await notifySagePosterAboutPost(input);
+    }),
+    runFeatureSafely('sagestore:on-post-submit', async () => {
+      await sendPostEventToSageStore(input);
     }),
   ]);
 

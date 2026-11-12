@@ -13,8 +13,20 @@
         "endpoint": "/external/comments",
         "scopes": ["global"]
       },
+      "sagePosterReplyToComment": {
+        "endpoint": "/external/comments/reply",
+        "scopes": ["global"]
+      },
       "sagePosterDeletePost": {
         "endpoint": "/external/posts/delete",
+        "scopes": ["global"]
+      },
+      "sagePosterCheckCrosspost": {
+        "endpoint": "/external/crossposts/check",
+        "scopes": ["global"]
+      },
+      "sagePosterCreateCrosspost": {
+        "endpoint": "/external/crossposts",
         "scopes": ["global"]
       }
     }
@@ -74,6 +86,16 @@
         "label": "SagePoster webhook secret",
         "isSecret": true,
         "helpText": "Bearer token SagePoster expects on incoming post event requests."
+      },
+      "sagePosterCrosspostAnalysisUrl": {
+        "type": "string",
+        "label": "SagePoster crosspost analysis URL",
+        "helpText": "Full HTTPS endpoint on SagePoster that accepts reddit.crosspost.assess requests. Its hostname must be approved for Devvit HTTP fetch."
+      },
+      "sageStoreApiUrl": {
+        "type": "string",
+        "label": "SageStore API base URL",
+        "helpText": "Base URL for SageStore, for example https://your-service.example.com. Reddit post and comment events are sent to /reddit-events. Add its hostname to permissions.http.domains."
       }
     },
     "subreddit": {

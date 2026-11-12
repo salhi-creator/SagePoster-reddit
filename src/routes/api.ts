@@ -1,11 +1,12 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { reddit } from '@devvit/web/server';
-import type { T3 } from '@devvit/web/shared';
-
+import type { T1, T3 } from '@devvit/web/shared';
+//import // dotenv
 // These routes are mounted at /external in src/index.ts and are called by
 // SagePoster using a Devvit managed token (Authorization: Bearer devvit_at_...).
 export const api = new Hono();
 
+const BaseUrl = process.env.SAGEPOSTER_URL
 type CreatePostRequest = {
   subreddit: string;
   title: string;
@@ -17,8 +18,20 @@ type CreateCommentRequest = {
   body: string;
 };
 
+type ReplyToCommentRequest = {
+  commentId: string;
+  body: string;
+  idempotencyKey?: string;
+};
+
 type DeletePostRequest = {
   postId: string;
+};
+
+type CrosspostRequest = {
+  sourcePostId: string;
+  targetSubreddit: string;
+  title?: string;
 };
 
 const MAX_PAGE_SIZE = 30;
@@ -37,7 +50,137 @@ function asT3(id: string): T3 {
   return (id.startsWith('t3_') ? id : `t3_${id}`) as T3;
 }
 
-api.get('/posts', async (c) => {
+function asT1(id: string): T1 {
+  return (id.startsWith('t1_') ? id : `t1_${id}`) as T1;
+}
+
+function normalizeSubredditName(name: string): string {
+  return name.trim().replace(/^r\//i, '');
+}
+
+async function parseCrosspostRequest(c: Context) {
+  let input: CrosspostRequest;
+  try {
+    input = await c.req.json<CrosspostRequest>();
+  } catch {
+    return { error: c.json({ error: 'Request body must be valid JSON.' }, 400) };
+  }
+
+  if (
+    !isNonEmptyString(input.sourcePostId) ||
+    !isNonEmptyString(input.targetSubreddit)
+  ) {
+    return {
+      error: c.json(
+        { error: 'sourcePostId and targetSubreddit are required.' },
+        400
+      ),
+    };
+  }
+
+  if (input.title !== undefined && !isNonEmptyString(input.title)) {
+    return { error: c.json({ error: 'title must be a non-empty string.' }, 400) };
+  }
+
+  return { input };
+}
+
+// Preflight only: SagePoster can analyze these rules and the source content.
+// This route never publishes anything.
+api.post(`${BaseUrl}/crossposts/check`, async (c) => {
+  const parsed = await parseCrosspostRequest(c);
+  if (parsed.error) return parsed.error;
+  const { input } = parsed;
+  if (!input) return c.json({ error: 'Invalid crosspost request.' }, 400);
+
+  try {
+    const [sourcePost, target] = await Promise.all([
+      reddit.getPostById(asT3(input.sourcePostId.trim())),
+      reddit.getSubredditByName(normalizeSubredditName(input.targetSubreddit)),
+    ]);
+
+    const rules = await reddit.getRules(target.name);
+    const canCrosspost = target.settings.crosspostable;
+    const sourcePostData = {
+      id: sourcePost.id,
+      subreddit: sourcePost.subredditName,
+      title: sourcePost.title,
+      body: sourcePost.body ?? null,
+      url: sourcePost.url,
+      permalink: sourcePost.permalink,
+    };
+    const targetRules = rules.map((rule) => ({
+      name: rule.shortName,
+      description: rule.description,
+      appliesTo: rule.kind,
+    }));
+
+    // SagePoster performs the semantic content/rule analysis. This endpoint
+    // only submits the explicit preflight request; it does not crosspost.
+
+    return c.json({
+      ok: true,
+      canCrosspost,
+      sourcePost: sourcePostData,
+      targetSubreddit: target.name,
+      rules: targetRules,
+    });
+  } catch (error) {
+    console.error('[external-api] Failed to prepare crosspost rules check', error);
+    return c.json(
+      { error: 'Reddit could not fetch the source post or destination rules.' },
+      502
+    );
+  }
+});
+
+// Publishing is a distinct explicit request, intended after SagePoster/user review.
+api.post(`${BaseUrl}/crossposts`, async (c) => {
+  const parsed = await parseCrosspostRequest(c);
+  if (parsed.error) return parsed.error;
+  const { input } = parsed;
+  if (!input) return c.json({ error: 'Invalid crosspost request.' }, 400);
+
+  try {
+    const [sourcePost, target] = await Promise.all([
+      reddit.getPostById(asT3(input.sourcePostId.trim())),
+      reddit.getSubredditByName(normalizeSubredditName(input.targetSubreddit)),
+    ]);
+
+    if (!target.settings.crosspostable) {
+      return c.json(
+        { error: `r/${target.name} does not currently allow crossposts.` },
+        409
+      );
+    }
+
+    const crosspost = await sourcePost.crosspost({
+      subredditName: target.name,
+      title: input.title?.trim() || sourcePost.title,
+      runAs: 'APP',
+    });
+
+    return c.json(
+      {
+        ok: true,
+        sourcePostId: sourcePost.id,
+        targetSubreddit: target.name,
+        crosspostId: crosspost.id,
+        url: crosspost.url,
+        permalink: crosspost.permalink,
+      },
+      201
+    );
+  } catch (error) {
+    console.error('[external-api] Failed to crosspost', error);
+    return c.json(
+      { error: 'Reddit could not crosspost to the destination subreddit.' },
+      502
+    );
+  }
+});
+
+api.get(`${BaseUrl}/posts`, async (c) => {
   const subreddit = c.req.query('subreddit');
   if (!isNonEmptyString(subreddit)) {
     return c.json({ error: 'subreddit query parameter is required.' }, 400);
@@ -87,7 +230,7 @@ api.get('/posts', async (c) => {
   }
 });
 
-api.get('/comments', async (c) => {
+api.get(`${BaseUrl}/comments`, async (c) => {
   const postId = c.req.query('postId');
   if (!isNonEmptyString(postId)) {
     return c.json({ error: 'postId query parameter is required.' }, 400);
@@ -120,7 +263,7 @@ api.get('/comments', async (c) => {
   }
 });
 
-api.post('/posts', async (c) => {
+api.post(`${BaseUrl}/posts`, async (c) => {
   let input: CreatePostRequest;
   try {
     input = await c.req.json<CreatePostRequest>();
@@ -150,7 +293,7 @@ api.post('/posts', async (c) => {
   }
 });
 
-api.post('/posts/delete', async (c) => {
+api.post(`${BaseUrl}/posts/delete`, async (c) => {
   let input: DeletePostRequest;
   try {
     input = await c.req.json<DeletePostRequest>();
@@ -172,7 +315,7 @@ api.post('/posts/delete', async (c) => {
   }
 });
 
-api.post('/comments', async (c) => {
+api.post(`${BaseUrl}/comments`, async (c) => {
   let input: CreateCommentRequest;
   try {
     input = await c.req.json<CreateCommentRequest>();
@@ -195,5 +338,37 @@ api.post('/comments', async (c) => {
   } catch (error) {
     console.error('[external-api] Failed to submit comment', error);
     return c.json({ error: 'Reddit could not create the comment.' }, 502);
+  }
+});
+
+// SagePoster calls this after its comment-event worker produces a reply.
+api.post(`${BaseUrl}/comments/reply`, async (c) => {
+  let input: ReplyToCommentRequest;
+  try {
+    input = await c.req.json<ReplyToCommentRequest>();
+  } catch {
+    return c.json({ error: 'Request body must be valid JSON.' }, 400);
+  }
+
+  if (!isNonEmptyString(input.commentId) || !isNonEmptyString(input.body)) {
+    return c.json({ error: 'commentId and body are required.' }, 400);
+  }
+  if (input.idempotencyKey !== undefined && !isNonEmptyString(input.idempotencyKey)) {
+    return c.json({ error: 'idempotencyKey must be a non-empty string.' }, 400);
+  }
+
+  const commentId = asT1(input.commentId.trim());
+  try {
+    const parentComment = await reddit.getCommentById(commentId);
+    await parentComment.reply({ text: input.body.trim(), runAs: 'APP' });
+
+    return c.json({
+      commentId,
+      body: input.body.trim(),
+      idempotencyKey: input.idempotencyKey ?? null,
+    }, 201);
+  } catch (error) {
+    console.error('[external-api] Failed to reply to comment', error);
+    return c.json({ error: 'Reddit could not reply to the comment.' }, 502);
   }
 });
