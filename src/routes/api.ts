@@ -1,12 +1,11 @@
 import { Hono, type Context } from 'hono';
-import { reddit } from '@devvit/web/server';
+import { reddit, redis, settings } from '@devvit/web/server';
 import type { T1, T3 } from '@devvit/web/shared';
 //import // dotenv
 // These routes are mounted at /external in src/index.ts and are called by
 // SagePoster using a Devvit managed token (Authorization: Bearer devvit_at_...).
 export const api = new Hono();
 
-const BaseUrl = process.env.SAGEPOSTER_URL
 type CreatePostRequest = {
   subreddit: string;
   title: string;
@@ -21,7 +20,7 @@ type CreateCommentRequest = {
 type ReplyToCommentRequest = {
   commentId: string;
   body: string;
-  idempotencyKey?: string;
+  idempotencyKey: string;
 };
 
 type DeletePostRequest = {
@@ -34,7 +33,16 @@ type CrosspostRequest = {
   title?: string;
 };
 
-const MAX_PAGE_SIZE = 30;
+const MAX_PAGE_SIZE = 100;
+
+api.use('*', async (c, next) => {
+  const expectedToken = (await settings.get<string>('redditServiceToken'))?.trim();
+  const authorization = c.req.header('Authorization');
+  if (!expectedToken || authorization !== `Bearer ${expectedToken}`) {
+    return c.json({ error: 'Unauthorized.' }, 401);
+  }
+  await next();
+});
 
 function parsePageSize(rawValue: string | undefined): number {
   const parsed = Number.parseInt(rawValue ?? '25', 10);
@@ -87,7 +95,7 @@ async function parseCrosspostRequest(c: Context) {
 
 // Preflight only: SagePoster can analyze these rules and the source content.
 // This route never publishes anything.
-api.post(`${BaseUrl}/crossposts/check`, async (c) => {
+api.post('/crossposts/check', async (c) => {
   const parsed = await parseCrosspostRequest(c);
   if (parsed.error) return parsed.error;
   const { input } = parsed;
@@ -135,7 +143,7 @@ api.post(`${BaseUrl}/crossposts/check`, async (c) => {
 });
 
 // Publishing is a distinct explicit request, intended after SagePoster/user review.
-api.post(`${BaseUrl}/crossposts`, async (c) => {
+api.post('/crossposts', async (c) => {
   const parsed = await parseCrosspostRequest(c);
   if (parsed.error) return parsed.error;
   const { input } = parsed;
@@ -180,7 +188,7 @@ api.post(`${BaseUrl}/crossposts`, async (c) => {
   }
 });
 
-api.get(`${BaseUrl}/posts`, async (c) => {
+api.get('/posts', async (c) => {
   const subreddit = c.req.query('subreddit');
   if (!isNonEmptyString(subreddit)) {
     return c.json({ error: 'subreddit query parameter is required.' }, 400);
@@ -230,7 +238,7 @@ api.get(`${BaseUrl}/posts`, async (c) => {
   }
 });
 
-api.get(`${BaseUrl}/comments`, async (c) => {
+api.get('/comments', async (c) => {
   const postId = c.req.query('postId');
   if (!isNonEmptyString(postId)) {
     return c.json({ error: 'postId query parameter is required.' }, 400);
@@ -263,7 +271,7 @@ api.get(`${BaseUrl}/comments`, async (c) => {
   }
 });
 
-api.post(`${BaseUrl}/posts`, async (c) => {
+api.post('/posts', async (c) => {
   let input: CreatePostRequest;
   try {
     input = await c.req.json<CreatePostRequest>();
@@ -293,7 +301,7 @@ api.post(`${BaseUrl}/posts`, async (c) => {
   }
 });
 
-api.post(`${BaseUrl}/posts/delete`, async (c) => {
+api.post('/posts/delete', async (c) => {
   let input: DeletePostRequest;
   try {
     input = await c.req.json<DeletePostRequest>();
@@ -315,7 +323,7 @@ api.post(`${BaseUrl}/posts/delete`, async (c) => {
   }
 });
 
-api.post(`${BaseUrl}/comments`, async (c) => {
+api.post('/comments', async (c) => {
   let input: CreateCommentRequest;
   try {
     input = await c.req.json<CreateCommentRequest>();
@@ -342,7 +350,7 @@ api.post(`${BaseUrl}/comments`, async (c) => {
 });
 
 // SagePoster calls this after its comment-event worker produces a reply.
-api.post(`${BaseUrl}/comments/reply`, async (c) => {
+api.post('/comments/reply', async (c) => {
   let input: ReplyToCommentRequest;
   try {
     input = await c.req.json<ReplyToCommentRequest>();
@@ -350,25 +358,88 @@ api.post(`${BaseUrl}/comments/reply`, async (c) => {
     return c.json({ error: 'Request body must be valid JSON.' }, 400);
   }
 
-  if (!isNonEmptyString(input.commentId) || !isNonEmptyString(input.body)) {
-    return c.json({ error: 'commentId and body are required.' }, 400);
+  if (
+    !isNonEmptyString(input.commentId) ||
+    !isNonEmptyString(input.body) ||
+    !isNonEmptyString(input.idempotencyKey) ||
+    input.idempotencyKey.length > 200
+  ) {
+    return c.json(
+      { error: 'commentId, body, and an idempotencyKey of at most 200 characters are required.' },
+      400
+    );
   }
-  if (input.idempotencyKey !== undefined && !isNonEmptyString(input.idempotencyKey)) {
-    return c.json({ error: 'idempotencyKey must be a non-empty string.' }, 400);
+
+  const commentId = asT1(input.commentId.trim());
+  const body = input.body.trim();
+  const idempotencyKey = input.idempotencyKey.trim();
+  const redisKey = `sageposter:comment-reply:${encodeURIComponent(idempotencyKey)}`;
+  let acquiredLock = false;
+  try {
+    const cached = await redis.get(redisKey);
+    if (cached) {
+      if (cached === 'processing') {
+        return c.json({ error: 'A request with this idempotencyKey is already processing.' }, 409);
+      }
+      const previous = JSON.parse(cached) as {
+        requestedCommentId: string;
+        requestedBody: string;
+        response: { commentId: string; body: string; idempotencyKey: string };
+      };
+      if (previous.requestedCommentId !== commentId || previous.requestedBody !== body) {
+        return c.json({ error: 'idempotencyKey was already used for a different reply.' }, 409);
+      }
+      return c.json(previous.response, 200);
+    }
+
+    const acquired = await redis.set(redisKey, 'processing', {
+      nx: true,
+      expiration: new Date(Date.now() + 5 * 60 * 1000),
+    });
+    if (acquired !== 'OK') {
+      return c.json({ error: 'A request with this idempotencyKey is already processing.' }, 409);
+    }
+    acquiredLock = true;
+
+    const parentComment = await reddit.getCommentById(commentId);
+    const reply = await parentComment.reply({ text: body, runAs: 'APP' });
+    const response = {
+      commentId: reply.id,
+      body,
+      idempotencyKey,
+    };
+    await redis.set(redisKey, JSON.stringify({
+      requestedCommentId: commentId,
+      requestedBody: body,
+      response,
+    }), { expiration: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) });
+
+    return c.json(response, 201);
+  } catch (error) {
+    if (acquiredLock) await redis.del(redisKey).catch(() => undefined);
+    console.error('[external-api] Failed to reply to comment', error);
+    return c.json({ error: 'Reddit could not reply to the comment.' }, 502);
+  }
+});
+
+api.post('/comments/delete', async (c) => {
+  let input: { commentId: string };
+  try {
+    input = await c.req.json<{ commentId: string }>();
+  } catch {
+    return c.json({ error: 'Request body must be valid JSON.' }, 400);
+  }
+  if (!isNonEmptyString(input.commentId)) {
+    return c.json({ error: 'commentId is required.' }, 400);
   }
 
   const commentId = asT1(input.commentId.trim());
   try {
-    const parentComment = await reddit.getCommentById(commentId);
-    await parentComment.reply({ text: input.body.trim(), runAs: 'APP' });
-
-    return c.json({
-      commentId,
-      body: input.body.trim(),
-      idempotencyKey: input.idempotencyKey ?? null,
-    }, 201);
+    const comment = await reddit.getCommentById(commentId);
+    await comment.remove();
+    return c.json({ ok: true, commentId });
   } catch (error) {
-    console.error('[external-api] Failed to reply to comment', error);
-    return c.json({ error: 'Reddit could not reply to the comment.' }, 502);
+    console.error('[external-api] Failed to delete comment', error);
+    return c.json({ error: 'Reddit could not delete the comment.' }, 502);
   }
 });

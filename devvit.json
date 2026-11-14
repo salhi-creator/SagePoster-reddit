@@ -7,27 +7,45 @@
     "externalEndpoints": {
       "sagePosterPosts": {
         "endpoint": "/external/posts",
-        "scopes": ["global"]
+        "scopes": [
+          "global"
+        ]
       },
       "sagePosterPostComments": {
         "endpoint": "/external/comments",
-        "scopes": ["global"]
+        "scopes": [
+          "global"
+        ]
       },
       "sagePosterReplyToComment": {
         "endpoint": "/external/comments/reply",
-        "scopes": ["global"]
+        "scopes": [
+          "global"
+        ]
+      },
+      "sagePosterDeleteComment": {
+        "endpoint": "/external/comments/delete",
+        "scopes": [
+          "global"
+        ]
       },
       "sagePosterDeletePost": {
         "endpoint": "/external/posts/delete",
-        "scopes": ["global"]
+        "scopes": [
+          "global"
+        ]
       },
       "sagePosterCheckCrosspost": {
         "endpoint": "/external/crossposts/check",
-        "scopes": ["global"]
+        "scopes": [
+          "global"
+        ]
       },
       "sagePosterCreateCrosspost": {
         "endpoint": "/external/crossposts",
-        "scopes": ["global"]
+        "scopes": [
+          "global"
+        ]
       }
     }
   },
@@ -92,10 +110,16 @@
         "label": "SagePoster crosspost analysis URL",
         "helpText": "Full HTTPS endpoint on SagePoster that accepts reddit.crosspost.assess requests. Its hostname must be approved for Devvit HTTP fetch."
       },
-      "sageStoreApiUrl": {
+      "sagePosterApiUrl": {
         "type": "string",
-        "label": "SageStore API base URL",
-        "helpText": "Base URL for SageStore, for example https://your-service.example.com. Reddit post and comment events are sent to /reddit-events. Add its hostname to permissions.http.domains."
+        "label": "SagePoster API base URL",
+        "helpText": "Base URL for SagePoster, for example https://your-service.example.com. Reddit post and comment events are sent to /reddit-events. Add its hostname to permissions.http.domains."
+      },
+      "redditServiceToken": {
+        "type": "string",
+        "label": "Reddit service token",
+        "isSecret": true,
+        "helpText": "Shared Bearer token used to authenticate SagePoster API calls and Reddit event webhooks. Configure the same value as REDDIT_SERVICE_TOKEN in SagePoster."
       }
     },
     "subreddit": {
@@ -195,5 +219,8 @@
       "enable": true,
       "scope": "moderator"
     }
+  },
+  "dev": {
+    "subreddit": "sageposter_dev"
   }
 }

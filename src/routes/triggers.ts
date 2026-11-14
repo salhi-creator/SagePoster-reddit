@@ -18,9 +18,9 @@ import {
   handlePostSubmitFlairUpdater,
 } from '../features/flair-updater/triggers.js';
 import {
-  sendCommentEventToSageStore,
-  sendPostEventToSageStore,
-} from '../features/sagestore-events/notify.js';
+  sendCommentEventToSagePoster,
+  sendPostEventToSagePoster,
+} from '../features/sageposter-events/notify.js';
 
 // Router for trigger endpoints declared in devvit.json/triggers.
 export const triggers = new Hono();
@@ -125,8 +125,8 @@ triggers.post('/on-comment-submit', async (c) => {
     runFeatureSafely('flair-updater:on-comment-submit', async () => {
       await handleCommentSubmitFlairUpdater(input);
     }),
-    runFeatureSafely('sagestore:on-comment-submit', async () => {
-      await sendCommentEventToSageStore(input);
+    runFeatureSafely('sageposter:on-comment-submit-event', async () => {
+      await sendCommentEventToSagePoster(input);
     }),
   ]);
 
@@ -147,8 +147,8 @@ triggers.post('/on-post-submit', async (c) => {
     runFeatureSafely('sageposter:on-post-submit', async () => {
       await notifySagePosterAboutPost(input);
     }),
-    runFeatureSafely('sagestore:on-post-submit', async () => {
-      await sendPostEventToSageStore(input);
+    runFeatureSafely('sageposter:on-post-submit-event', async () => {
+      await sendPostEventToSagePoster(input);
     }),
   ]);
 
